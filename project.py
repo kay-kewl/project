@@ -13,6 +13,7 @@ help_message = '/help - send help\n' \
                '/add_user [id] - adds user to the bot users\n' \
                '/del_user [id] - deletes user from the bot users\n' \
 
+users = {}
 # bot
 bot = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
 print('bot works')
@@ -42,6 +43,11 @@ async def add_bot_user(event):
     first_name = user.first_name
     last_name = user.last_name
     name = ' '.join([first_name, last_name]) if last_name else first_name
+    users[another_id] = {
+        'name': first_name,
+        'surname': last_name,
+        'bot': False
+    }
     response = f'Success. Access was granted to the user with id {another_id}'
     time.sleep(5)
     await bot.send_file(id, response)
@@ -74,4 +80,42 @@ async def del_bot_user(event):
     await bot.send_file(id, response)
     time.sleep(2)
     await bot.send_message(id, f'{name} can no longer text me!')
+
+
+@bot.on(events.NewMessage(pattern='^/on$'))
+async def turn_on(event):
+    message = event.message
+    id = message.chat_id
+    if id not in bot_users:
+        await bot.send_message(id, 'I forbid you to write me ever again.')
+        return
+    if not users[id]['bot']:
+        users[id]['bot'] = True
+        await bot.send_message(id, f'{users[id]["name"]} I will now answer all your messages.')
+    else:
+        await bot.send_message(id, f'{users[id]["name"]} I thought we were on the same page...')
+
+
+@bot.on(events.NewMessage(pattern='^/off$'))
+async def turn_off(event):
+    message = event.message
+    id = message.chat_id
+    if id not in bot_users:
+        await bot.send_message(id, "Don't patronize me, you goon.")
+        return
+    if users[id]['bot']:
+        users[id]['bot'] = False
+        await bot.send_message(id, f'{users[id]} I will now answer all your messages.')
+    else:
+        await bot.send_message(id, f'{users[id]["name"]} I thought we were on the same page...')
+
+
+@bot.on(events.NewMessage)
+async def answering(event):
+    message = event.message
+    id = message.chat_id
+    await bot.send_message(id, message)
+
+
+
 
