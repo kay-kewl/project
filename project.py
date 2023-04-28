@@ -6,11 +6,14 @@ import numpy as np
 from telethon.tl.types import ReplyKeyboardMarkup, KeyboardButton, KeyboardButtonRow
 from telethon.sync import TelegramClient
 from telethon import events
+from db import db_session
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.neighbors import BallTree
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import make_pipeline
+from db.user import User
+from db.ids import Id
 
 api_id = 12345678
 api_hash = ''
@@ -28,7 +31,9 @@ help_message = '/help - sends help\n' \
                '(alternative: "Закончить разговор")\n' \
                '/send_log - sends log.csv\n' \
                '/clear_log - clears log.csv\n' \
-               '/update_data - updates dataset for bot'
+               '/list - returns list of people who accessed bot\n' \
+               '/context_count - returns list of people and the amount of ' \
+               'context for log'
 
 users = {
     me:
@@ -45,6 +50,7 @@ commands = ['/help', '/add_user', '/del_user', '/on', '/off', '/send_log', '/cle
             'Начать разговор', 'Закончить разговор', '/start', '/update_data']
 on_and_off_commands = ['/on', 'Начать разговор', '/off', 'Закончить разговор', '/help']
 log = []
+db_session.global_init("db/bot.db")
 
 replies = pd.read_csv('data/data_ok.csv', sep=';')
 vectorizer = TfidfVectorizer()
@@ -98,7 +104,11 @@ btns0 = ReplyKeyboardMarkup(
                 KeyboardButton(text='/help')
             ]
         ),
-        KeyboardButton(text='/send_log')
+        KeyboardButtonRow(
+            [
+                KeyboardButton(text='/send_log')
+            ]
+        )
     ],
     resize=True
 )
@@ -110,7 +120,11 @@ btns1 = ReplyKeyboardMarkup(
                 KeyboardButton(text='/help')
             ]
         ),
-        KeyboardButton(text='/send_log')
+        KeyboardButtonRow(
+            [
+                KeyboardButton(text='/send_log')
+            ]
+        )
     ],
     resize=True
 )
@@ -130,12 +144,19 @@ all_btns = ReplyKeyboardMarkup(
         ),
         KeyboardButtonRow(
             [
+                KeyboardButton(text='/list'),
+                KeyboardButton(text='/context_count')
+            ]
+        ),
+        KeyboardButtonRow(
+            [
                 KeyboardButton(text='/update_data')
             ]
         )
     ],
     resize=True
 )
+
 print('bot works')
 
 
@@ -166,13 +187,9 @@ async def add_bot_user(event):
         return
     another_id = int(message.message.split()[1])
     bot_users.add(another_id)
-    user = await bot.get_entity(another_id)
-    first_name = user.first_name
-    last_name = user.last_name
-    name = ' '.join([first_name, last_name]) if last_name else first_name
     users[another_id] = {
-        'name': first_name,
-        'surname': last_name,
+        'name': '',
+        'surname': '',
         'bot': False,
         'sending_file': False
     }
@@ -180,7 +197,7 @@ async def add_bot_user(event):
     time.sleep(2)
     await bot.send_message(id, response)
     time.sleep(2)
-    await bot.send_message(id, f'{name} can now finally text me!')
+    await bot.send_message(id, f'{another_id} can now finally text me!')
 
 
 @bot.on(events.NewMessage(pattern='^/del_user'))  # works
@@ -250,6 +267,23 @@ async def turn_off(event):
 async def answering(event):
     message = event.message
     id = message.chat_id
+    if users[id]['name'] == users[id]['surname'] == '':
+        user = await bot.get_entity(id)
+        first_name = user.first_name
+        last_name = user.last_name
+        users[id]['name'] = first_name
+        users[id]['surname'] = last_name
+        db_sess = db_session.create_session()
+        if not db_sess.query(Id).filter(Id.tg_id == id).all():
+            new_user = User()
+            new_user.name = first_name
+            new_user.surname = last_name
+            new_user.context_count = 0
+            new_id = Id()
+            new_id.tg_id = id
+            db_sess.add(new_user)
+            db_sess.add(new_id)
+            db_sess.commit()
     if not (id in bot_users):
         await bot.send_message(id, "Don't waste my time!")
         return
@@ -276,6 +310,9 @@ async def answering(event):
         'timestamp': datetime.datetime.now().strftime('%d/%B/%Y %H:%M:%S.%f'),
         'input': message.message.lower()
     }
+    db_sess = db_session.create_session()
+    db_sess.query(User).filter(User.tg_id == id).first().context_count += 1
+    db_sess.commit()
     answer = get_answer(current)
     await bot.send_message(id, answer)
 
@@ -309,7 +346,9 @@ async def start_bot(event):
 async def send_log(event):
     message = event.message
     id = message.chat_id
-    if not (id in bot_users):
+    db_sess = db_session.create_session()
+    if not (id in bot_users) or \
+            not db_sess.query(User).filter(User.tg_id == id).first().log_access:
         await bot.send_message("Don't you dare.")
         return
     if users[id]['bot']:
@@ -323,7 +362,9 @@ async def send_log(event):
 async def clear_log_file(event):
     message = event.message
     id = message.chat_id
-    if not (id in bot_users):
+    db_sess = db_session.create_session()
+    if not (id in bot_users) or \
+            not db_sess.query(User).filter(User.tg_id == id).first().log_access:
         await bot.send_file(id, '6.jpg')
         return
     if users[id]['bot']:
@@ -343,13 +384,45 @@ async def clear_log_file(event):
 async def update_data(event):
     message = event.message
     id = message.chat_id
-    if not (id in bot_users):
+    db_sess = db_session.create_session()
+    if not (id in bot_users) or \
+            not db_sess.query(User).filter(User.tg_id == id).first().update_dataset:
         await bot.send_file(id, 'data/5.jpg')
         return
     if users[id]['bot']:
         return
     users[id]['sending_file'] = True
     await bot.send_message(id, 'I am now waiting for the .csv file')
+
+
+@bot.on(events.NewMessage(pattern='^/list$'))
+async def show_list(event):
+    message = event.message
+    id = message.chat_id
+    if not (id in bot_users):
+        await bot.send_file(id, 'data/6.jpg')
+        return
+    if users[id]['bot']:
+        return
+    db_sess = db_session.create_session()
+    people = db_sess.query(User).filter(User.first_access)
+    await bot.send_message(id, '\n'.join(
+        [' '.join([i.name, i.surname, i.first_access]) for i in people]))
+
+
+@bot.on(events.NewMessage(pattern='^/context_count$'))
+async def show_list(event):
+    message = event.message
+    id = message.chat_id
+    if not (id in bot_users):
+        await bot.send_file(id, 'data/6.jpg')
+        return
+    if users[id]['bot']:
+        return
+    db_sess = db_session.create_session()
+    people = db_sess.query(User).filter(User.first_access)
+    await bot.send_message(id, '\n'.join([' '.join(
+        [i.name, i.surname, i.context_count]) for i in people]))
 
 
 def check_file(file):
@@ -363,7 +436,6 @@ def check_file(file):
             writer.writerows(reader)
         return 'Dataset was successfully updated.'
     except Exception as e:
-        print(e)
         return "Can't update dataset with this .csv file!"
 
 
