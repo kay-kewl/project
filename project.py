@@ -279,6 +279,7 @@ async def answering(event):
             new_user.name = first_name
             new_user.surname = last_name
             new_user.context_count = 0
+            new_user.first_access = datetime.datetime.now().strftime('%d/%B/%Y %H:%M:%S.%f')
             new_id = Id()
             new_id.tg_id = id
             db_sess.add(new_user)
